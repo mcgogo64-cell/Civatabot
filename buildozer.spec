@@ -139,13 +139,16 @@ android.api = 34
 #android.ndk = 25b
 
 # (str) Android NDK directory (if empty, it will be automatically downloaded.)
-#android.ndk_dir = 
+android.ndk_dir = 
 
 # (str) Android SDK directory (if empty, it will be automatically downloaded.)
-#android.sdk_dir = 
+android.sdk_dir = 
 
-# (str) ANT directory (if empty, it will be automatically downloaded.)
-#android.ant_dir = 
+# (str) python-for-android branch to use, defaults to master  
+p4a.branch = master
+
+# (str) Bootstrap to use for android builds
+p4a.bootstrap = sdl2
 
 # (str) If you need custom Java classes in your project, place them in a directory
 # called java-classes and set this to the name of the directory
