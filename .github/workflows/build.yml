@@ -101,4 +101,119 @@ jobs:
     - name: Validate buildozer.spec
       run: |
         if [ ! -f buildozer.spec ]; then
-          echo "buildozer.
+          echo "buildozer.spec not found!"
+          exit 1
+        fi
+        echo "buildozer.spec found and validated"
+
+    - name: Initialize buildozer
+      run: |
+        buildozer init || echo "buildozer.spec already exists"
+
+    - name: Download and setup Android SDK
+      run: |
+        mkdir -p $HOME/.buildozer/android/platform
+        cd $HOME/.buildozer/android/platform
+        
+        # Download Android SDK if not cached
+        if [ ! -d "android-sdk" ]; then
+          echo "Downloading Android SDK..."
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+          unzip -q commandlinetools-linux-9477386_latest.zip
+          mkdir -p android-sdk/cmdline-tools
+          mv cmdline-tools android-sdk/cmdline-tools/latest
+          rm commandlinetools-linux-9477386_latest.zip
+        fi
+        
+        export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+        
+        # Accept licenses and install required packages
+        echo "Installing Android SDK components..."
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653"
+
+    - name: Accept Android SDK licenses
+      run: |
+        export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list_installed
+
+    - name: Set Android environment
+      run: |
+        export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
+        export ANDROID_SDK_ROOT=$ANDROID_HOME
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0
+        echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
+        echo "PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0" >> $GITHUB_ENV
+
+    - name: Build APK with buildozer
+      run: |
+        export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
+        export ANDROID_SDK_ROOT=$ANDROID_HOME
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0
+        
+        # Clean previous builds if any
+        buildozer android clean || true
+        
+        # Build the APK
+        buildozer android debug
+      timeout-minutes: 45
+
+    - name: Find APK file
+      run: |
+        find . -name "*.apk" -type f
+        ls -la bin/ || echo "bin directory not found"
+
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: civatabot-debug-apk
+        path: bin/*.apk
+        if-no-files-found: error
+
+    - name: Upload APK to releases (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: bin/*.apk
+        tag_name: ${{ github.ref_name }}
+        name: CivataBot v${{ github.ref_name }}
+        body: |
+          ## CivataBot - Nut Sorting Puzzle Game
+          
+          ### Features:
+          - 🧠 Advanced BFS algorithm solver
+          - 🎮 Progressive difficulty levels  
+          - 🔩 Beautiful bolt graphics
+          - 🏆 Auto-solve and step-by-step playback
+          - 📱 Optimized for Android devices
+          
+          ### Installation:
+          1. Download the APK file below
+          2. Enable "Install from unknown sources" in Android settings
+          3. Install and enjoy the puzzle!
+          
+          **Built with:** Python + Kivy + Buildozer
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build summary
+      if: always()
+      run: |
+        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Repository**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Time**: $(date)" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -f "bin/*.apk" ]; then
+          echo "- **APK Generated**: ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "- **APK Location**: bin/*.apk" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- **APK Generated**: ❌ Failed" >> $GITHUB_STEP_SUMMARY
+        fi
