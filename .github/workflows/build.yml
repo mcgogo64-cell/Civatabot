@@ -1,11 +1,19 @@
-name: Build Android APK
+# Codex prompt: Bu workflow'u düzelt.
+# - Android SDK 34.0.0, NDK 25.2.9519653 kullan
+# - Lisansları kabul et
+# - aidl not found hatasını çöz
+# - buildozer android debug çalışsın
+# - çıkan APK artifact olarak yüklensin
 
+name: Build APK with Buildozer
 on:
   push:
-    branches: [ main, master, develop ]
-  pull_request:
-    branches: [ main, master ]
+    paths:
+      - 'main.py'
+      - 'buildozer.spec'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
+...
 
 jobs:
   build:
