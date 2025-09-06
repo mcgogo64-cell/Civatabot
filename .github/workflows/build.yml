@@ -150,14 +150,12 @@ jobs:
 
     - name: Build APK with buildozer
       run: |
-        export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
         export ANDROID_SDK_ROOT=$ANDROID_HOME
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0
         
         # Force buildozer to use correct SDK path
         export ANDROIDAPI="34"
         export NDKAPI="21"
-        export ANDROID_NDK_HOME="$HOME/.buildozer/android/platform/android-ndk-r25b"
         
         # Clean previous builds if any
         buildozer android clean || true
