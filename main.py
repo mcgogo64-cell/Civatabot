@@ -1,368 +1,367 @@
-# -*- coding: utf-8 -*-
-from __future__ import annotations
-from typing import List, Tuple, Optional
-from threading import Thread
-from functools import partial
-
+import random
+from collections import deque
+from copy import deepcopy
 from kivy.app import App
-from kivy.clock import Clock, mainthread
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
-from kivy.uix.togglebutton import ToggleButton
-from kivy.uix.slider import Slider
-from kivy.uix.scrollview import ScrollView
-from kivy.graphics import Color, RoundedRectangle
+from kivy.uix.popup import Popup
+from kivy.clock import Clock
+from kivy.graphics import Color, Rectangle, Ellipse
+from kivy.uix.widget import Widget
 
-# ------------------------------------------------------------
-#  Puzzle model & solver (Water-Sort / Civata renk istifleme)
-# ------------------------------------------------------------
-
-ColorId = int                   # 1..N (0 = boş yok)
-Move = Tuple[int, int, int]     # (src, dst, kaç parça)
-
-def is_uniform_full(col: List[ColorId], H: int) -> bool:
-    return len(col) == H and (len(col) == 0 or all(x == col[0] for x in col))
-
-def is_solved(state: List[List[ColorId]], H: int) -> bool:
-    for col in state:
-        if len(col) == 0:
-            continue
-        if not is_uniform_full(col, H):
-            return False
-    return True
-
-def canonical(state: List[List[ColorId]]) -> Tuple[Tuple[ColorId, ...], ...]:
-    return tuple(tuple(c) for c in state)
-
-def legal_moves(state: List[List[ColorId]], H: int, last: Optional[Tuple[int,int]]=None):
-    n = len(state)
-    for i in range(n):
-        if not state[i]:
-            continue
-        if is_uniform_full(state[i], H):
-            continue
-        top = state[i][-1]
-        # blok uzunluğu (üstte bitişik aynı renk kaç tane)
-        block = 1
-        for k in range(len(state[i]) - 2, -1, -1):
-            if state[i][k] == top:
-                block += 1
-            else:
-                break
-        for j in range(n):
-            if i == j: 
-                continue
-            # hemen geri alma hamlesini azalt
-            if last and last == (j, i) and len(state[j]) and (not state[i] or state[i][-1] == state[j][-1]):
-                continue
-            if len(state[j]) == H:
-                continue
-            if state[j] and state[j][-1] != top:
-                continue
-            room = H - len(state[j])
-            take = min(block, room)
-            if take <= 0:
-                continue
-            yield (i, j, take)
-
-def apply_move(state: List[List[ColorId]], mv: Move) -> List[List[ColorId]]:
-    i, j, k = mv
-    ns = [c[:] for c in state]
-    moved = []
-    for _ in range(k):
-        if not ns[i]:
-            break
-        if ns[j] and ns[j][-1] != ns[i][-1]:
-            break
-        moved.append(ns[i].pop())
-        ns[j].append(moved[-1])
-    return ns
-
-def solve_iterative_deepening(start: List[List[ColorId]], H: int, max_depth=80) -> Optional[List[Move]]:
-    """
-    Oldukça genel ve sağlam bir çözücü.
-    DFS + iteratif derinleşme, ziyaret kümesi ve basit kırpmalar.
-    """
-    target_key = None  # sadece visited için
-    start_key = canonical(start)
-
-    for limit in range(0, max_depth + 1):
-        visited = set()
-        path: List[Move] = []
-
-        def dfs(state, depth, last=None):
-            key = canonical(state)
-            if key in visited:
-                return None
-            visited.add(key)
-
-            if is_solved(state, H):
-                return list(path)
-            if depth == 0:
-                return None
-
-            # küçük sezgisel sıralama: boşalan/tek renge yaklaşan varışları öne al
-            ms = list(legal_moves(state, H, last))
-            def score(m):
-                i, j, k = m
-                after = apply_move(state, m)
-                good = 0
-                if is_uniform_full(after[j], H):
-                    good += 3
-                if len(after[i]) == 0:
-                    good += 2
-                if len(after[j]) > 0:
-                    # varışta tek renk mi?
-                    t = after[j][-1]
-                    if all(x == t for x in after[j]):
-                        good += 1
-                return -good  # küçükten büyüğe sıralıyor, eksi ile tersle
-            ms.sort(key=score)
-
-            for m in ms:
-                path.append(m)
-                res = dfs(apply_move(state, m), depth - 1, last=(m[0], m[1]))
-                if res is not None:
-                    return res
-                path.pop()
-            return None
-
-        ans = dfs(start, limit)
-        if ans is not None:
-            return ans
-    return None
-
-# ------------------------------------------------------------
-#  UI
-# ------------------------------------------------------------
-
-# Renk paleti (id -> (adı, RGBA))
-PALETTE = {
-    1: ("Blue",   (0.16, 0.52, 0.97, 1)),
-    2: ("Yellow", (0.98, 0.80, 0.10, 1)),
-    3: ("Red",    (0.95, 0.25, 0.25, 1)),
-    4: ("Green",  (0.25, 0.75, 0.45, 1)),
-    5: ("Purple", (0.55, 0.40, 0.90, 1)),
-    6: ("Cyan",   (0.20, 0.85, 0.85, 1)),
-    7: ("Orange", (0.99, 0.55, 0.10, 1)),
-    8: ("Gray",   (0.70, 0.70, 0.75, 1)),
-}
-
-class ColumnWidget(Button):
-    def __init__(self, capacity: int, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.capacity = capacity
-        self.stack: List[ColorId] = []
-        self.background_color = (0, 0, 0, 0)
-        self.border = (0, 0, 0, 0)
-        self.update_canvas()
-
-    def clear_stack(self):
-        self.stack = []
-        self.update_canvas()
-
-    def push(self, cid: ColorId):
-        if len(self.stack) < self.capacity:
-            if len(self.stack) == 0 or self.stack[-1] == cid:
-                self.stack.append(cid)
-                self.update_canvas()
-
-    def pop(self) -> Optional[ColorId]:
-        if self.stack:
-            c = self.stack.pop()
-            self.update_canvas()
-            return c
-        return None
-
-    def update_canvas(self, *_):
-        self.canvas.after.clear()
-        with self.canvas.after:
-            # sütun çerçevesi
-            Color(0.9, 0.9, 0.95, 1); RoundedRectangle(radius=[12,], pos=self.pos, size=self.size)
-        # iç kısımda pulları çiz
-        def _draw(*_):
-            self.canvas.before.clear()
-            with self.canvas.before:
-                pad = 8
-                cell_h = (self.height - 2*pad) / self.capacity
-                x = self.x + pad
-                y = self.y + pad
-                w = self.width - 2*pad
-                # zemin
-                Color(0.12, 0.12, 0.16, 1)
-                RoundedRectangle(pos=(self.x, self.y), size=(self.width, self.height), radius=[12,])
-                # her parça
-                for idx, cid in enumerate(self.stack):
-                    c = PALETTE.get(cid, ("?", (0.8, 0.8, 0.8, 1)))[1]
-                    Color(*c)
-                    RoundedRectangle(pos=(x, y + idx*cell_h), size=(w, cell_h-2), radius=[8,])
-        Clock.schedule_once(_draw, 0)
-
-    def on_size(self, *_):
-        self.update_canvas()
-
-class Root(BoxLayout):
-    def __init__(self, **kwargs):
-        super().__init__(orientation="vertical", **kwargs)
-
-        self.capacity = 4
-        self.cols = 6
-
-        # üst kontrol barı
-        top = BoxLayout(size_hint_y=None, height=56, spacing=6, padding=6)
-        self.add_widget(top)
-
-        self.info = Label(text="Civata Bot • Edit mode: add/remove, Solve ile çöz", halign="left", valign="middle")
-        self.info.bind(size=lambda *_: setattr(self.info, 'text_size', self.info.size))
-        top.add_widget(self.info)
-
-        self.edit_toggle = ToggleButton(text="Edit", state="down", size_hint_x=None, width=80)
-        top.add_widget(self.edit_toggle)
-
-        self.solve_btn = Button(text="Solve", size_hint_x=None, width=90, on_release=self.on_solve)
-        top.add_widget(self.solve_btn)
-
-        self.play_btn = Button(text="Play ▶", size_hint_x=None, width=90, on_release=self.on_play, disabled=True)
-        top.add_widget(self.play_btn)
-
-        # palet
-        pal = BoxLayout(size_hint_y=None, height=56, spacing=6, padding=[6,0,6,6])
-        self.add_widget(pal)
-        self.active_color: ColorId = 1
-        for cid, (name, rgba) in list(PALETTE.items())[:6]:
-            b = ToggleButton(text=name, group="pal", size_hint_x=None, width=100)
-            def _make_setter(c=cid):
-                def _on(but):
-                    if but.state == "down":
-                        self.active_color = c
-                return _on
-            b.bind(on_release=_make_setter(cid))
-            pal.add_widget(b)
-            if cid == self.active_color:
-                b.state = "down"
-
-        # saha
-        wrap = ScrollView()
-        self.add_widget(wrap)
-        self.grid = GridLayout(cols=self.cols, padding=8, spacing=8, size_hint_y=None)
-        self.grid.bind(minimum_height=lambda _, h: setattr(self.grid, 'height', h))
-        wrap.add_widget(self.grid)
-
-        self.columns: List[ColumnWidget] = []
-        self.solution: Optional[List[Move]] = None
-        self.sol_step = 0
-
-        self.build_board(cols=self.cols, capacity=self.capacity)
-        self.make_sample()
-
-    def build_board(self, cols: int, capacity: int):
-        self.grid.clear_widgets()
-        self.columns = []
-        for _ in range(cols):
-            c = ColumnWidget(capacity=capacity, size_hint=(None, None), width=90, height=260)
-            c.bind(on_release=partial(self.on_col_tap, c))
-            self.columns.append(c)
-            self.grid.add_widget(c)
-
-    def make_sample(self):
-        # örnek karma bir tahta dolduralım (2 boş kolon bırak)
-        data = [
-            [1,2,1,2],
-            [3,1,3,2],
-            [2,3,1,3],
-            [], []
+class BoltWidget(Widget):
+    def __init__(self, color_id, **kwargs):
+        super().__init__(**kwargs)
+        self.color_id = color_id
+        self.colors = [
+            (0.8, 0.8, 0.8, 1),  # 0 - Empty (Light Gray)
+            (1, 0, 0, 1),        # 1 - Red
+            (0, 1, 0, 1),        # 2 - Green
+            (0, 0, 1, 1),        # 3 - Blue
+            (1, 1, 0, 1),        # 4 - Yellow
+            (1, 0, 1, 1),        # 5 - Magenta
+            (0, 1, 1, 1),        # 6 - Cyan
+            (1, 0.5, 0, 1),      # 7 - Orange
+            (0.5, 0, 1, 1),      # 8 - Purple
         ]
-        for col, arr in zip(self.columns, data + [[]]*(len(self.columns)-len(data))):
-            col.clear_stack()
-            for x in arr:
-                col.push(x)
-
-    def read_state(self) -> Tuple[List[List[ColorId]], int]:
-        H = self.columns[0].capacity
-        state = [c.stack[:] for c in self.columns]
-        return state, H
-
-    def set_state(self, state: List[List[ColorId]]):
-        for col, arr in zip(self.columns, state):
-            col.clear_stack()
-            for x in arr:
-                col.push(x)
-
-    def on_col_tap(self, col: ColumnWidget, *_):
-        if self.edit_toggle.state == "down":
-            # edit modu: kısa dokunuş ekle, uzun dokunuş sil
-            if len(col.stack) < col.capacity and (not col.stack or col.stack[-1] == self.active_color):
-                col.push(self.active_color)
+        self.bind(size=self.update_graphics, pos=self.update_graphics)
+        
+    def update_graphics(self, *args):
+        self.canvas.clear()
+        with self.canvas:
+            if self.color_id == 0:  # Empty slot
+                Color(0.9, 0.9, 0.9, 0.3)
+                Rectangle(pos=self.pos, size=self.size)
             else:
-                col.pop()
-        else:
-            # oyun modu: kullanıcı hamle tıklatması (kaynak->hedef)
-            if not hasattr(self, "_pending"):
-                self._pending = col
-                col.opacity = 0.7
-            else:
-                src = self._pending
-                self._pending = None
-                src.opacity = 1.0
-                if src is col:
-                    return
-                # tek parça taşı
-                if src.stack and (len(col.stack) < col.capacity) and (not col.stack or col.stack[-1] == src.stack[-1]):
-                    col.push(src.pop())
+                # Draw bolt
+                color = self.colors[self.color_id]
+                Color(*color)
+                # Body of bolt
+                bolt_width = min(self.width * 0.6, self.height * 0.8)
+                bolt_height = min(self.width * 0.6, self.height * 0.8)
+                x = self.x + (self.width - bolt_width) / 2
+                y = self.y + (self.height - bolt_height) / 2
+                Rectangle(pos=(x, y), size=(bolt_width, bolt_height))
+                
+                # Head of bolt (circle)
+                Color(color[0] * 0.8, color[1] * 0.8, color[2] * 0.8, 1)
+                head_size = bolt_width * 0.4
+                head_x = x + (bolt_width - head_size) / 2
+                head_y = y + bolt_height - head_size / 2
+                Ellipse(pos=(head_x, head_y), size=(head_size, head_size))
 
-    def on_play(self, *_):
-        if not self.solution:
-            return
-        if self.sol_step >= len(self.solution):
-            self.info.text = "Tüm adımlar oynatıldı ✔"
-            self.play_btn.disabled = True
-            return
-        i, j, k = self.solution[self.sol_step]
-        self.sol_step += 1
+class ColumnWidget(BoxLayout):
+    def __init__(self, column_data, max_height, **kwargs):
+        super().__init__(orientation='vertical', **kwargs)
+        self.column_data = column_data
+        self.max_height = max_height
+        self.update_display()
+        
+    def update_display(self):
+        self.clear_widgets()
+        # Add empty slots from top
+        for i in range(self.max_height - len(self.column_data)):
+            bolt = BoltWidget(color_id=0, size_hint=(1, 1))
+            self.add_widget(bolt)
+        
+        # Add bolts from top to bottom
+        for color_id in reversed(self.column_data):
+            bolt = BoltWidget(color_id=color_id, size_hint=(1, 1))
+            self.add_widget(bolt)
 
-        # animasyon gibi sırayla k kez uygula
-        def _one(_t=[0]):
-            _t[0] += 1
-            if _t[0] > k:
-                return
-            val = self.columns[i].pop()
-            if val is not None:
-                self.columns[j].push(val)
-            if _t[0] < k:
-                Clock.schedule_once(_one, 0.15)
-        _one()
-        self.info.text = f"Hamle {self.sol_step}/{len(self.solution)}: {i+1} → {j+1} (x{k})"
+class GameState:
+    def __init__(self, columns):
+        self.columns = [col[:] for col in columns]  # Deep copy
+        
+    def __eq__(self, other):
+        return self.columns == other.columns
+        
+    def __hash__(self):
+        return hash(str(self.columns))
+        
+    def is_solved(self):
+        for col in self.columns:
+            if len(col) == 0:
+                continue
+            if len(set(col)) > 1:  # Different colors in same column
+                return False
+        return True
+        
+    def get_valid_moves(self):
+        moves = []
+        for from_col in range(len(self.columns)):
+            if len(self.columns[from_col]) == 0:
+                continue
+                
+            top_bolt = self.columns[from_col][-1]
+            
+            # Count consecutive bolts of same color from top
+            count = 1
+            for i in range(len(self.columns[from_col]) - 2, -1, -1):
+                if self.columns[from_col][i] == top_bolt:
+                    count += 1
+                else:
+                    break
+                    
+            for to_col in range(len(self.columns)):
+                if from_col == to_col:
+                    continue
+                    
+                # Check if we can move to this column
+                if len(self.columns[to_col]) == 0:
+                    # Empty column - can move any number of bolts
+                    for move_count in range(1, count + 1):
+                        moves.append((from_col, to_col, move_count))
+                else:
+                    # Non-empty column - check if top colors match
+                    if self.columns[to_col][-1] == top_bolt:
+                        # Can move bolts of same color
+                        available_space = 4 - len(self.columns[to_col])  # Assuming max 4 bolts per column
+                        max_movable = min(count, available_space)
+                        if max_movable > 0:
+                            for move_count in range(1, max_movable + 1):
+                                moves.append((from_col, to_col, move_count))
+        
+        return moves
+        
+    def apply_move(self, from_col, to_col, count):
+        new_state = GameState(self.columns)
+        
+        # Move bolts
+        for _ in range(count):
+            if len(new_state.columns[from_col]) > 0:
+                bolt = new_state.columns[from_col].pop()
+                new_state.columns[to_col].append(bolt)
+                
+        return new_state
 
-    def on_solve(self, *_):
-        state, H = self.read_state()
-        self.info.text = "Çözüm aranıyor…"
-        self.solve_btn.disabled = True
-        self.play_btn.disabled = True
-        self.solution = None
-        self.sol_step = 0
-
-        def _run():
-            ans = solve_iterative_deepening(state, H, max_depth=120)
-            self._on_solved(ans)
-
-        Thread(target=_run, daemon=True).start()
-
-    @mainthread
-    def _on_solved(self, ans: Optional[List[Move]]):
-        self.solve_btn.disabled = False
-        if not ans:
-            self.info.text = "Çözüm bulunamadı (daha çok boş kolon eklemeyi deneyin)."
-            return
-        self.solution = ans
-        self.sol_step = 0
-        self.play_btn.disabled = False
-        self.info.text = f"Çözüm bulundu: {len(ans)} hamle. ▶ Play ile adım adım uygula."
+class BoltSortingSolver:
+    def __init__(self):
+        self.solution_path = []
+        
+    def solve_bfs(self, initial_state):
+        if initial_state.is_solved():
+            return []
+            
+        queue = deque([(initial_state, [])])
+        visited = {initial_state}
+        max_iterations = 10000  # Prevent infinite loops
+        iteration = 0
+        
+        while queue and iteration < max_iterations:
+            iteration += 1
+            current_state, moves = queue.popleft()
+            
+            for move in current_state.get_valid_moves():
+                from_col, to_col, count = move
+                new_state = current_state.apply_move(from_col, to_col, count)
+                
+                if new_state in visited:
+                    continue
+                    
+                new_moves = moves + [move]
+                
+                if new_state.is_solved():
+                    return new_moves
+                    
+                visited.add(new_state)
+                queue.append((new_state, new_moves))
+                
+        return None  # No solution found
 
 class CivataBotApp(App):
     def build(self):
-        return Root()
+        self.title = "CivataBot - Nut Sorting Puzzle"
+        
+        # Game state
+        self.level = 1
+        self.columns = []
+        self.max_height = 4
+        self.solver = BoltSortingSolver()
+        self.solution = []
+        self.play_index = 0
+        self.is_playing = False
+        
+        # Main layout
+        main_layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        
+        # Header
+        header = BoxLayout(size_hint_y=None, height=50, spacing=10)
+        self.level_label = Label(text=f'Level: {self.level}', size_hint_x=0.3)
+        self.status_label = Label(text='Tap New Game to start!', size_hint_x=0.7)
+        header.add_widget(self.level_label)
+        header.add_widget(self.status_label)
+        main_layout.add_widget(header)
+        
+        # Game board
+        self.game_board = GridLayout(cols=5, spacing=5, size_hint_y=0.7)
+        main_layout.add_widget(self.game_board)
+        
+        # Control buttons
+        controls = BoxLayout(size_hint_y=None, height=50, spacing=10)
+        
+        self.new_game_btn = Button(text='New Game')
+        self.new_game_btn.bind(on_press=self.new_game)
+        
+        self.solve_btn = Button(text='Solve')
+        self.solve_btn.bind(on_press=self.solve_puzzle)
+        
+        self.play_btn = Button(text='Play Solution', disabled=True)
+        self.play_btn.bind(on_press=self.play_solution)
+        
+        self.next_level_btn = Button(text='Next Level')
+        self.next_level_btn.bind(on_press=self.next_level)
+        
+        controls.add_widget(self.new_game_btn)
+        controls.add_widget(self.solve_btn)
+        controls.add_widget(self.play_btn)
+        controls.add_widget(self.next_level_btn)
+        
+        main_layout.add_widget(controls)
+        
+        # Initialize first level
+        self.generate_level()
+        
+        return main_layout
+    
+    def generate_level(self):
+        # Calculate level parameters
+        num_colors = min(2 + self.level // 2, 8)  # Start with 2 colors, max 8
+        num_columns = min(4 + self.level // 3, 7)  # Start with 4 columns, max 7
+        empty_columns = max(1, 3 - self.level // 4)  # Decrease empty columns as level increases
+        
+        # Generate puzzle
+        self.columns = []
+        
+        # Create color distribution
+        colors_per_column = []
+        for color_id in range(1, num_colors + 1):
+            colors_per_column.extend([color_id] * self.max_height)
+        
+        random.shuffle(colors_per_column)
+        
+        # Fill columns
+        filled_columns = num_columns - empty_columns
+        for i in range(filled_columns):
+            column = []
+            for j in range(self.max_height):
+                if colors_per_column:
+                    column.append(colors_per_column.pop())
+            self.columns.append(column)
+        
+        # Add empty columns
+        for i in range(empty_columns):
+            self.columns.append([])
+        
+        # Ensure puzzle is solvable by shuffling moves
+        self.shuffle_puzzle()
+        
+        self.update_display()
+        self.status_label.text = f'Level {self.level} - {num_colors} colors, {num_columns} columns'
+        self.solution = []
+        self.play_btn.disabled = True
+    
+    def shuffle_puzzle(self):
+        # Perform random valid moves to ensure solvability
+        current_state = GameState(self.columns)
+        
+        for _ in range(20 + self.level * 5):  # More shuffles for higher levels
+            moves = current_state.get_valid_moves()
+            if moves:
+                move = random.choice(moves)
+                current_state = current_state.apply_move(*move)
+        
+        self.columns = current_state.columns
+    
+    def update_display(self):
+        self.game_board.clear_widgets()
+        self.game_board.cols = len(self.columns)
+        
+        for i, column_data in enumerate(self.columns):
+            column_widget = ColumnWidget(column_data, self.max_height)
+            self.game_board.add_widget(column_widget)
+    
+    def new_game(self, instance):
+        self.generate_level()
+        self.is_playing = False
+        Clock.unschedule(self.play_next_move)
+    
+    def solve_puzzle(self, instance):
+        self.status_label.text = 'Solving...'
+        
+        # Create initial state
+        initial_state = GameState(self.columns)
+        
+        # Check if already solved
+        if initial_state.is_solved():
+            self.status_label.text = 'Already solved!'
+            return
+        
+        # Solve using BFS
+        self.solution = self.solver.solve_bfs(initial_state)
+        
+        if self.solution is None:
+            self.show_popup("Unsolvable", "This puzzle has no solution!")
+            self.status_label.text = 'No solution found!'
+            self.play_btn.disabled = True
+        else:
+            self.status_label.text = f'Solution found! {len(self.solution)} moves'
+            self.play_btn.disabled = False
+    
+    def play_solution(self, instance):
+        if not self.solution:
+            return
+            
+        self.is_playing = True
+        self.play_index = 0
+        self.play_btn.disabled = True
+        Clock.schedule_interval(self.play_next_move, 1.0)  # 1 second between moves
+    
+    def play_next_move(self, dt):
+        if self.play_index >= len(self.solution):
+            Clock.unschedule(self.play_next_move)
+            self.is_playing = False
+            self.play_btn.disabled = False
+            self.status_label.text = 'Solution completed!'
+            
+            # Check if solved
+            current_state = GameState(self.columns)
+            if current_state.is_solved():
+                self.show_popup("Congratulations!", "Puzzle solved! Ready for next level?")
+            return
+        
+        # Apply next move
+        from_col, to_col, count = self.solution[self.play_index]
+        
+        # Move bolts one by one for visual effect
+        for _ in range(count):
+            if len(self.columns[from_col]) > 0:
+                bolt = self.columns[from_col].pop()
+                self.columns[to_col].append(bolt)
+        
+        self.update_display()
+        self.status_label.text = f'Move {self.play_index + 1}/{len(self.solution)}: Column {from_col + 1} → Column {to_col + 1} ({count} bolts)'
+        self.play_index += 1
+    
+    def next_level(self, instance):
+        self.level += 1
+        self.level_label.text = f'Level: {self.level}'
+        self.generate_level()
+        self.is_playing = False
+        Clock.unschedule(self.play_next_move)
+    
+    def show_popup(self, title, message):
+        popup_layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        popup_layout.add_widget(Label(text=message))
+        
+        close_btn = Button(text='Close', size_hint_y=None, height=50)
+        popup_layout.add_widget(close_btn)
+        
+        popup = Popup(title=title, content=popup_layout, size_hint=(0.8, 0.4))
+        close_btn.bind(on_press=popup.dismiss)
+        popup.open()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     CivataBotApp().run()
