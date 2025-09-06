@@ -32,14 +32,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libffi-dev libssl-dev liblzma-dev zlib1g-dev \
-                                  libgles2-mesa-dev libegl1-mesa unzip git
+                                  libgles2-mesa-dev libegl1 libglu1-mesa unzip git
 
       - name: Install Buildozer
         run: |
           python -m pip install --upgrade pip
           pip install buildozer==1.5.0 Cython==0.29.36 virtualenv
 
-      # Android SDK kur ve lisansları kabul et
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
@@ -48,7 +47,6 @@ jobs:
           sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653"
           yes | sdkmanager --licenses
 
-      # Buildozer'ın bu SDK/NDK'yı görmesi için ortam değişkenleri
       - name: Export SDK paths
         run: |
           echo "ANDROIDSDK=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
