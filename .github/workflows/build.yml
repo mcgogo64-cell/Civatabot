@@ -17,7 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -28,6 +28,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # Ubuntu bağımlılıkları (libegl1-mesa YOK! doğru paket libegl1)
       - name: Install Ubuntu deps
         run: |
           sudo apt-get update
@@ -39,18 +40,47 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer==1.5.0 Cython==0.29.36 virtualenv
 
+      # Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # Gerekli SDK bileşenleri – BİLEREK 34.0.0 sabitleniyor
       - name: Install SDK components
         run: |
           sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653"
           yes | sdkmanager --licenses
 
+      # Buildozer'ın AYNI SDK/NDK'yı kullanması için ortam değişkenleri + PATH
       - name: Export SDK paths
         run: |
           echo "ANDROIDSDK=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
           echo "ANDROIDNDK=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/build-tools/34.0.0" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+
+      # Spec içine build-tools versiyonunu ZORLA yazıyoruz (36.x-rc1’e gitmesin)
+      - name: Pin build-tools version in spec
+        run: |
+          if grep -q '^android.build_tools_version' buildozer.spec; then
+            sed -i 's/^android.build_tools_version.*/android.build_tools_version = 34.0.0/' buildozer.spec
+          else
+            printf '\n# Pinned to avoid preview build-tools\nandroid.build_tools_version = 34.0.0\n' >> buildozer.spec
+          fi
+          if grep -q '^android.api' buildozer.spec; then
+            sed -i 's/^android.api.*/android.api = 34/' buildozer.spec
+          else
+            printf 'android.api = 34\n' >> buildozer.spec
+          fi
+          if grep -q '^android.minapi' buildozer.spec; then
+            sed -i 's/^android.minapi.*/android.minapi = 26/' buildozer.spec
+          else
+            printf 'android.minapi = 26\n' >> buildozer.spec
+          fi
+          if grep -q '^android.accept_sdk_license' buildozer.spec; then
+            sed -i 's/^android.accept_sdk_license.*/android.accept_sdk_license = True/' buildozer.spec
+          else
+            printf 'android.accept_sdk_license = True\n' >> buildozer.spec
+          fi
 
       - name: Build APK
         env:
@@ -59,6 +89,11 @@ jobs:
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
         run: |
+          set -e
+          echo "Using SDK at: $ANDROIDSDK"
+          echo "Using NDK at: $ANDROIDNDK"
+          which aidl || true
+          ls -al "$ANDROID_SDK_ROOT/build-tools" || true
           buildozer -v android debug
 
       - name: Upload APK
