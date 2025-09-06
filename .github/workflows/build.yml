@@ -7,16 +7,19 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
     steps:
       - uses: actions/checkout@v4
 
-      # Buildozer'ı, Android SDK/NDK ve lisans kabulünü kendi içinde halleden
-      # hazır GitHub Action. Sadece komutu veriyoruz.
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Build APK
         uses: digreatbrian/buildozer-action@v2
         with:
-          python-version: 3.10
           buildozer-cmd: buildozer -v android debug
 
       - name: Upload APK
