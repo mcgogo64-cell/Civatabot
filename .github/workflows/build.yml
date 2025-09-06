@@ -28,7 +28,7 @@ jobs:
         distribution: 'temurin'
 
     - name: Cache pip dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -36,7 +36,7 @@ jobs:
           ${{ runner.os }}-pip-
 
     - name: Cache buildozer global directory
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.buildozer
         key: ${{ runner.os }}-buildozer-${{ hashFiles('**/buildozer.spec') }}
@@ -44,7 +44,7 @@ jobs:
           ${{ runner.os }}-buildozer-
 
     - name: Cache buildozer dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: .buildozer
         key: ${{ runner.os }}-buildozer-deps-${{ hashFiles('**/buildozer.spec') }}
@@ -167,7 +167,7 @@ jobs:
         ls -la bin/ || echo "bin directory not found"
 
     - name: Upload APK artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: civatabot-debug-apk
         path: bin/*.apk
