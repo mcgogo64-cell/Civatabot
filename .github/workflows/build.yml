@@ -1,69 +1,104 @@
-name: Build APK with Buildozer
+name: Build Android APK
 
 on:
   push:
-    paths:
-      - 'main.py'
-      - 'buildozer.spec'
-      - '.github/workflows/build.yml'
-      - 'requirements.txt'
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
 
-      - name: Setup Java (JDK 17)
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
 
-      - name: Install Ubuntu deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libffi-dev libssl-dev liblzma-dev zlib1g-dev \
-                                  libgles2-mesa-dev libegl1 unzip git
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
 
-      - name: Install Buildozer
-        run: |
-          python -m pip install --upgrade pip
-          pip install buildozer==1.5.0 Cython==0.29.36 virtualenv
+    - name: Cache buildozer global directory
+      uses: actions/cache@v3
+      with:
+        path: ~/.buildozer
+        key: ${{ runner.os }}-buildozer-${{ hashFiles('**/buildozer.spec') }}
+        restore-keys: |
+          ${{ runner.os }}-buildozer-
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+    - name: Cache buildozer dependencies
+      uses: actions/cache@v3
+      with:
+        path: .buildozer
+        key: ${{ runner.os }}-buildozer-deps-${{ hashFiles('**/buildozer.spec') }}
+        restore-keys: |
+          ${{ runner.os }}-buildozer-deps-
 
-      - name: Install SDK components (force correct version)
-        run: |
-          yes | sdkmanager --licenses
-          sdkmanager --uninstall "build-tools;36.1.0-rc1" || true
-          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653"
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          git \
+          python3 \
+          python3-pip \
+          python3-setuptools \
+          python3-wheel \
+          openjdk-17-jdk \
+          unzip \
+          zlib1g-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libtinfo5 \
+          cmake \
+          libffi-dev \
+          libssl-dev \
+          automake \
+          autoconf \
+          libtool \
+          pkg-config \
+          libltdl-dev \
+          libbz2-dev \
+          libsqlite3-dev \
+          libreadline-dev \
+          tk-dev \
+          zip \
+          curl \
+          wget
 
-      - name: Export SDK paths
-        run: |
-          echo "ANDROIDSDK=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROIDNDK=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
+    - name: Install Cython and other Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install --upgrade setuptools wheel
+        python -m pip install Cython==0.29.33
+        python -m pip install buildozer
+        python -m pip install kivy
 
-      - name: Build APK
-        env:
-          ANDROIDSDK: ${{ env.ANDROIDSDK }}
-          ANDROIDNDK: ${{ env.ANDROIDNDK }}
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
-        run: |
-          buildozer -v android debug
+    - name: Set environment variables
+      run: |
+        echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+        echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+        echo "PATH=$PATH:$HOME/.buildozer/android/platform/android-sdk/tools:$HOME/.buildozer/android/platform/android-sdk/tools/bin:$HOME/.buildozer/android/platform/android-sdk/platform-tools" >> $GITHUB_ENV
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: civatabot-apk
-          path: bin/*.apk
+    - name: Validate buildozer.spec
+      run: |
+        if [ ! -f buildozer.spec ]; then
+          echo "buildozer.
